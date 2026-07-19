@@ -1,21 +1,31 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 source $(dirname $0)/version
 
 ARCH=${ARCH:-"amd64"}
-SUFFIX=""
-[ "${ARCH}" != "amd64" ] && SUFFIX="_${ARCH}"
 
-cd $(dirname $0)/../dist
+cd $(dirname $0)/..
 
-TAG=${TAG:-${VERSION}${SUFFIX}}
-REPO=${REPO:-rancher}
-
-if echo $TAG | grep -q dirty; then
-    TAG=dev
+if echo "$VERSION" | grep -q dirty; then
+    echo "Refusing to package a dirty version: $VERSION" >&2
+    exit 1
 fi
 
-tar cvzf share-mnt.tar.gz -C ../bin share-mnt
+version=${VERSION#v}
+artifact="dist/artifacts/mount-propagation-${version}-linux-${ARCH}.tar.gz"
+mkdir -p dist/artifacts
+rm -f "$artifact"
 
-echo Created share-mnt.tar.gz
+tar \
+    --sort=name \
+    --mtime="@${SOURCE_DATE_EPOCH:-0}" \
+    --owner=0 \
+    --group=0 \
+    --numeric-owner \
+    -C bin \
+    -cf - \
+    mount-propagation share-mnt |
+    gzip -n -9 > "$artifact"
+
+echo "Created $artifact with the share-mnt compatibility alias"

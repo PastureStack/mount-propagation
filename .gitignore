@@ -1,5 +1,7 @@
 /.dapper
 /bin
 /dist
+/mount-propagation
+/share-mnt
 *.swp
 /.trash-cache
