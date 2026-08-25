@@ -5,7 +5,7 @@ go 1.26.0
 toolchain go1.27.0
 
 require (
-	github.com/sirupsen/logrus v1.10.1
+	github.com/sirupsen/logrus v1.10.2
 	github.com/urfave/cli v1.22.17
 )
 
