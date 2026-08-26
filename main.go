@@ -38,7 +38,7 @@ var (
 
 func main() {
 	if err := newApp().Run(os.Args); err != nil {
-		logrus.Fatal(err)
+		logrus.Fatal(safeLogValue(err))
 	}
 }
 
@@ -63,7 +63,7 @@ func newApp() *cli.App {
 
 		i, err := fun(cli)
 		if err != nil {
-			logrus.Fatal(err)
+			logrus.Fatal(safeLogValue(err))
 		}
 		os.Exit(i)
 	}
@@ -109,7 +109,7 @@ func stage2(cli *cli.Context) (int, error) {
 		}
 
 		if err := makeShared(val); err != nil {
-			logrus.Errorf("Failed to make shared %s: %v", val, err)
+			logrus.Errorf("Failed to make shared %s: %s", safeLogValue(val), safeLogValue(err))
 			return -1, err
 		}
 	}
@@ -139,14 +139,14 @@ func start(cli *cli.Context) (int, error) {
 
 	nsenter, err := exec.LookPath("nsenter")
 	if err != nil {
-		logrus.Error("Failed to find nsenter:", err)
+		logrus.Error("Failed to find nsenter: ", safeLogValue(err))
 		return -1, err
 	}
 
 	args := []string{nsenter, "--mount=" + mnt, "-F", "--", path.Join(state.Config.Rootfs, self), "--stage2"}
 	args = append(args, os.Args[1:]...)
 
-	logrus.Infof("Execing %v", args)
+	logrus.Infof("Execing %s", safeLogValue(args))
 	return -1, syscall.Exec(nsenter, args, os.Environ())
 }
 
@@ -186,7 +186,7 @@ func findState(stateRoots ...string) (*State, error) {
 			return nil, err
 		}
 	}
-	fmt.Println("Found container ID:", containerID)
+	fmt.Println("Found container ID:", safeLogValue(containerID))
 	return findStateByContainerID(containerID, stateRoots...)
 }
 
@@ -196,14 +196,14 @@ func findStateByContainerID(containerID string, stateRoots ...string) (*State, e
 	}
 
 	for _, stateRoot := range stateRoots {
-		fmt.Println("Checking root:", stateRoot)
+		fmt.Println("Checking root:", safeLogValue(stateRoot))
 		files, err := os.ReadDir(stateRoot)
 		if err != nil {
 			continue
 		}
 
 		for _, file := range files {
-			fmt.Println("Checking file:", file.Name())
+			fmt.Println("Checking file:", safeLogValue(file.Name()))
 			if !strings.HasPrefix(file.Name(), containerID) {
 				continue
 			}
@@ -213,7 +213,7 @@ func findStateByContainerID(containerID string, stateRoots ...string) (*State, e
 				continue
 			}
 
-			fmt.Println("Found state.json:", file.Name())
+			fmt.Println("Found state.json:", safeLogValue(file.Name()))
 			var state State
 			return &state, json.Unmarshal(bytes, &state)
 		}
@@ -364,4 +364,10 @@ func rootIsShared(mounts []MountInfo) bool {
 
 func makeShared(target string) error {
 	return syscall.Mount("", target, "", uintptr(syscall.MS_SHARED|syscall.MS_REC), "")
+}
+
+func safeLogValue(value interface{}) string {
+	text := fmt.Sprint(value)
+	text = strings.ReplaceAll(text, "\r", "")
+	return strings.ReplaceAll(text, "\n", " ")
 }
