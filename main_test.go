@@ -133,3 +133,9 @@ func TestFindContainerIDFromStateForPIDFallsBackToDirectoryName(t *testing.T) {
 		t.Fatalf("container id = %q, want directory-container-id", containerID)
 	}
 }
+
+func TestSafeLogValueProducesSingleRecord(t *testing.T) {
+	if got := safeLogValue("first\r\nforged\nthird"); got != "first forged third" {
+		t.Fatalf("unexpected safe log value: %q", got)
+	}
+}
