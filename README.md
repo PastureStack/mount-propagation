@@ -50,6 +50,15 @@ Package the primary artifact and compatibility alias:
 VERSION_OVERRIDE=v1.0.10 SOURCE_DATE_EPOCH=0 ARCH=amd64 ./scripts/package
 ```
 
+The `release.yml` workflow checks the next `v1.0.11` raw Linux amd64 binary on
+pull requests and `main`: Go 1.27.0 build identity, race tests, vet, source and
+binary vulnerability/secret scans, a CycloneDX SBOM, and SHA-256 checksums.
+It publishes nothing automatically. A maintainer may dispatch it from `main`
+after the checks pass; the workflow then creates an annotated numeric tag and
+attaches the verified raw binary, archive, SBOM, scan evidence, and checksums
+to the GitHub Release. The v1.0.10 command above remains the currently
+published package example until that release completes.
+
 ## Unprivileged Tests
 
 The unit tests exercise CLI help, cgroup parsing, `/proc/<pid>/stat` parsing,

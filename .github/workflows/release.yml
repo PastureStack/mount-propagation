@@ -1,0 +1,220 @@
+name: Verify and release mount-propagation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mount-propagation-v1.0.11-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      RELEASE_TAG: v1.0.11
+      TRIVY_IMAGE: aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+      GOTOOLCHAIN: local
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install checksum-pinned Go 1.27.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/go1.27.0.linux-amd64.tar.gz"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "$archive" https://go.dev/dl/go1.27.0.linux-amd64.tar.gz
+          printf '%s  %s\n' \
+            '675c26c449cbb18fc24b74650de1eabbae6e16f64326fd85a283fb3b58280685' \
+            "$archive" | sha256sum --check
+          tar -C "$RUNNER_TEMP" -xzf "$archive"
+          printf '%s\n' "$RUNNER_TEMP/go/bin" >> "$GITHUB_PATH"
+
+      - name: Test and build the exact raw release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go version)" = 'go version go1.27.0 linux/amd64'
+          go mod verify
+          go test -race ./...
+          go vet ./...
+          VERSION_OVERRIDE="$RELEASE_TAG" ARCH=amd64 ./scripts/build
+          test "$(./bin/mount-propagation --version)" = "mount-propagation version $RELEASE_TAG"
+          test "$(./bin/share-mnt --version)" = "mount-propagation version $RELEASE_TAG"
+          mkdir -p dist/release
+          raw="dist/release/mount-propagation-${RELEASE_TAG}-linux-amd64"
+          install -m 0755 bin/mount-propagation "$raw"
+          file "$raw" | grep -E 'ELF 64-bit.*x86-64.*statically linked'
+          go version -m "$raw" | grep -F 'go1.27.0'
+          go version -m "$raw" | grep -E '^[[:space:]]*build[[:space:]]+CGO_ENABLED=0$'
+          first_hash="$(sha256sum "$raw" | cut -d' ' -f1)"
+          VERSION_OVERRIDE="$RELEASE_TAG" ARCH=amd64 ./scripts/build
+          test "$(sha256sum bin/mount-propagation | cut -d' ' -f1)" = "$first_hash"
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" \
+            VERSION_OVERRIDE="$RELEASE_TAG" ARCH=amd64 ./scripts/package
+          tar -tzf dist/artifacts/mount-propagation-1.0.11-linux-amd64.tar.gz |
+            diff -u <(printf 'mount-propagation\nshare-mnt\n') -
+          cp dist/artifacts/mount-propagation-1.0.11-linux-amd64.tar.gz dist/release/
+
+      - name: Scan source and the actual raw binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_tree="$(mktemp -d "$RUNNER_TEMP/mount-source.XXXXXX")"
+          product_tree="$(mktemp -d "$RUNNER_TEMP/mount-product.XXXXXX")"
+          git archive HEAD | tar -x -C "$source_tree"
+          cp dist/release/mount-propagation-v1.0.11-linux-amd64 "$product_tree/"
+          cache="$RUNNER_TEMP/mount-trivy-cache"
+          mkdir -p "$cache"
+          docker pull "$TRIVY_IMAGE"
+          docker run --rm -v "$cache:/root/.cache/trivy" "$TRIVY_IMAGE" \
+            image --cache-dir /root/.cache/trivy --download-db-only
+          for scope in source product; do
+            if [ "$scope" = source ]; then
+              scan_tree="$source_tree"
+              scan_command=fs
+            else
+              scan_tree="$product_tree"
+              scan_command=rootfs
+            fi
+            docker run --rm --network none -v "$cache:/root/.cache/trivy" \
+              -v "$scan_tree:/scan:ro" -v "$PWD/dist/release:/release" "$TRIVY_IMAGE" \
+              "$scan_command" --cache-dir /root/.cache/trivy --skip-db-update --offline-scan \
+              --scanners vuln,secret --severity CRITICAL,HIGH --format json \
+              --output "/release/${scope}-security.json" /scan
+            report="dist/release/${scope}-security.json"
+            test -s "$report"
+            if [ "$scope" = product ]; then
+              jq -e '[.Results[]? | select(.Type == "gobinary")] | length == 1' \
+                "$report" >/dev/null
+            fi
+            test "$(jq '[.Results[]?.Vulnerabilities[]?] | length' "$report")" -eq 0
+            test "$(jq '[.Results[]?.Secrets[]?] | length' "$report")" -eq 0
+          done
+          docker run --rm --network none -v "$cache:/root/.cache/trivy" \
+            -v "$product_tree:/scan:ro" -v "$PWD/dist/release:/release" "$TRIVY_IMAGE" \
+            rootfs --cache-dir /root/.cache/trivy --skip-db-update --offline-scan \
+            --format cyclonedx --output /release/product-sbom.cdx.json /scan
+          jq -e '(.components // []) | length > 0' \
+            dist/release/product-sbom.cdx.json >/dev/null
+          (
+            cd dist/release
+            sha256sum mount-propagation-v1.0.11-linux-amd64 \
+              mount-propagation-1.0.11-linux-amd64.tar.gz \
+              source-security.json product-security.json product-sbom.cdx.json \
+              > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+
+      - name: Retain the verified release candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mount-propagation-v1.0.11-${{ github.sha }}
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: github.event_name == 'workflow_dispatch'
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      RELEASE_TAG: v1.0.11
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the dispatch commit and tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download and recheck the same-run candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$GITHUB_SHA"
+          mkdir -p dist/release
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "mount-propagation-v1.0.11-$GITHUB_SHA" --dir dist/release
+          (
+            cd dist/release
+            sha256sum --check SHA256SUMS
+            test "$(wc -l < SHA256SUMS)" -eq 5
+            test -s mount-propagation-v1.0.11-linux-amd64
+          )
+          tag_ref_status="$(curl --proto '=https' --tlsv1.2 --silent --show-error \
+            --output "$RUNNER_TEMP/tag-ref.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG")"
+          case "$tag_ref_status" in
+            404) ;;
+            200)
+              tag_object="$(jq -er '.object | select(.type == "tag") | .sha' "$RUNNER_TEMP/tag-ref.json")"
+              test "$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" --jq .object.sha)" = "$GITHUB_SHA"
+              ;;
+            *) echo "Cannot establish tag state: HTTP $tag_ref_status" >&2; exit 1 ;;
+          esac
+          release_status="$(curl --proto '=https' --tlsv1.2 --silent --show-error \
+            --output "$RUNNER_TEMP/release.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")"
+          test "$release_status" = 404 || {
+            echo "Release exists or state is unknown: HTTP $release_status" >&2
+            exit 1
+          }
+          printf 'TAG_REF_STATUS=%s\n' "$tag_ref_status" >> "$GITHUB_ENV"
+
+      - name: Attest the checksummed binary and evidence
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/release/SHA256SUMS
+
+      - name: Create or verify the annotated tag, then publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$GITHUB_SHA"
+          if [ "$TAG_REF_STATUS" = 404 ]; then
+            tag_object="$(gh api -X POST "repos/$GITHUB_REPOSITORY/git/tags" \
+              -f tag="$RELEASE_TAG" \
+              -f message="Verified mount-propagation $RELEASE_TAG from $GITHUB_SHA" \
+              -f object="$GITHUB_SHA" -f type=commit --jq .sha)"
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$RELEASE_TAG" -f sha="$tag_object" >/dev/null
+          fi
+          tag_ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG")"
+          tag_object="$(jq -er '.object | select(.type == "tag") | .sha' <<<"$tag_ref")"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" --jq .object.sha)" = "$GITHUB_SHA"
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --title "Mount Propagation $RELEASE_TAG" \
+            --notes "Verified Linux amd64 raw binary built with Go 1.27.0 from $GITHUB_SHA. See SHA256SUMS and the attested evidence." \
+            dist/release/mount-propagation-v1.0.11-linux-amd64 \
+            dist/release/mount-propagation-1.0.11-linux-amd64.tar.gz \
+            dist/release/source-security.json \
+            dist/release/product-security.json \
+            dist/release/product-sbom.cdx.json \
+            dist/release/SHA256SUMS
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" |
+            jq -e --arg tag "$RELEASE_TAG" \
+              '.tag_name == $tag and .draft == false and .prerelease == false and
+               (.assets | length) == 6' >/dev/null
