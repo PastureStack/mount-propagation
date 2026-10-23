@@ -90,7 +90,7 @@ jobs:
             docker run --rm --network none -v "$cache:/root/.cache/trivy" \
               -v "$scan_tree:/scan:ro" -v "$PWD/dist/release:/release" "$TRIVY_IMAGE" \
               "$scan_command" --cache-dir /root/.cache/trivy --skip-db-update --offline-scan \
-              --scanners vuln,secret --severity CRITICAL,HIGH --format json \
+              --scanners vuln,secret --list-all-pkgs --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --format json \
               --output "/release/${scope}-security.json" /scan
             report="dist/release/${scope}-security.json"
             test -s "$report"
