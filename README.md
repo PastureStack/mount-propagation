@@ -47,16 +47,16 @@ Build on Linux:
 Package the primary artifact and compatibility alias:
 
 ```sh
-VERSION_OVERRIDE=v1.0.11 SOURCE_DATE_EPOCH=0 ARCH=amd64 ./scripts/package
+VERSION_OVERRIDE=v1.0.12 SOURCE_DATE_EPOCH=0 ARCH=amd64 ./scripts/package
 ```
 
-The `release.yml` workflow checks the `v1.0.11` raw Linux amd64 binary on
-pull requests and `main`: Go 1.27.0 build identity, race tests, vet, source and
+The `release.yml` workflow checks the `v1.0.12` raw Linux amd64 binary on
+pull requests and `main`: Go 1.27.3 build identity, race tests, vet, source and
 binary vulnerability/secret scans, a CycloneDX SBOM, and SHA-256 checksums.
 It publishes nothing automatically. A maintainer may dispatch it from `main`
 after the checks pass; the workflow then creates an annotated numeric tag and
 attaches the verified raw binary, archive, SBOM, scan evidence, and checksums
-to the GitHub Release. The published `v1.0.11` release includes the raw binary
+to the GitHub Release. The published `v1.0.12` release includes the raw binary
 and `SHA256SUMS`; verify the downloaded file before deploying it.
 
 ## Unprivileged Tests
@@ -93,3 +93,7 @@ framework. No artificial language selector is added by this migration POC.
 The original Apache License, Version 2.0 file is retained unchanged. Git
 history remains the authoritative record of original authors and later
 contributors.
+
+## October 2026 security maintenance
+
+Maintained Go builds select the patched Go 1.27.3 compiler without raising the existing Go language requirement. Ubuntu build/runtime stages apply the checksum-pinned `ca-certificates 20260816ubuntu0.26.04.1` security package after their frozen APT baseline; the final trust store and installed version are verified. Release artifacts must pass the repository's existing checks before publication.
