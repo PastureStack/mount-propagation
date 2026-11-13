@@ -4,7 +4,7 @@ TARGETS := $(shell ls scripts)
 DAPPER_IMAGE ?= pasturestack-mount-propagation-dapper:ubuntu26
 DAPPER_HOST_ARCH ?= amd64
 DOCKER_VERSION ?= 29.7.2
-GO_VERSION ?= 1.27.3
+GO_VERSION ?= 1.27.4
 DAPPER_SOURCE ?= /go/src/github.com/PastureStack/mount-propagation
 
 .dapper:
